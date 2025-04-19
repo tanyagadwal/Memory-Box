@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-secondary-50 text-secondary-800 font-sans;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-colors duration-200;
+  }
+  
+  .btn-primary {
+    @apply bg-primary-500 text-white hover:bg-primary-600;
+  }
+  
+  .btn-secondary {
+    @apply bg-secondary-200 text-secondary-800 hover:bg-secondary-300;
+  }
+  
+  .card {
+    @apply bg-white rounded-lg shadow-md p-6;
+  }
+  
+  .chat-bubble {
+    @apply p-3 rounded-lg my-1 max-w-[80%] shadow-bubble;
+  }
+  
+  .chat-bubble-outgoing {
+    @apply chat-bubble bg-primary-100 text-secondary-800 ml-auto rounded-tr-none;
+  }
+  
+  .chat-bubble-incoming {
+    @apply chat-bubble bg-white text-secondary-800 mr-auto rounded-tl-none;
+  }
+}

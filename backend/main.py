@@ -8,7 +8,24 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import io
 from datetime import datetime
-from ocr_service import extract_messages_from_image, VISION_API_AVAILABLE
+from ocr_service import extract_messages_from_image, VISION_API_AVAILABLE, verify_vision_api_credentials
+
+# Set Google Cloud credentials
+# Path to service account credentials file
+GOOGLE_CREDENTIALS_PATH = "/home/madhav/Desktop/memvol/Memory-Box/mimetic-card-457310-n5-890f77604726.json"
+if os.path.exists(GOOGLE_CREDENTIALS_PATH):
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_CREDENTIALS_PATH
+    print(f"Google Cloud credentials set from: {GOOGLE_CREDENTIALS_PATH}")
+else:
+    print(f"Warning: Google Cloud credentials file not found at: {GOOGLE_CREDENTIALS_PATH}")
+    print("Will use fallback OCR method (Tesseract)")
+
+# Verify the credentials are working
+vision_api_working = verify_vision_api_credentials()
+if vision_api_working:
+    print("✅ Google Vision API is properly configured and working")
+else:
+    print("⚠️ Google Vision API is not working, will use Tesseract OCR as fallback")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -73,51 +90,71 @@ async def upload_chat(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
     
-    # Check if we have OCR capabilities
-    if not VISION_API_AVAILABLE:
-        # We'll use our fallback OCR, but let the client know
-        print("Warning: Google Vision API not available, using fallback OCR")
-        
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
     
     # Process images in order
     all_messages = []
-    try:
-        for file in files:
+    processed_files = 0
+    failed_files = 0
+    
+    for file in files:
+        try:
             contents = await file.read()
             try:
                 # Extract chat messages using our OCR service
                 messages = extract_messages_from_image(contents)
-                all_messages.extend(messages)
+                if messages:
+                    all_messages.extend(messages)
+                    processed_files += 1
+                else:
+                    print(f"Warning: No messages extracted from {file.filename}")
+                    failed_files += 1
             except Exception as e:
-                # Log the error and continue with other files
                 print(f"Error processing file {file.filename}: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
-                
-        # Sort messages by timestamp if available, otherwise keep original order
-        if all(msg.get("timestamp") for msg in all_messages):
-            all_messages.sort(key=lambda msg: msg["timestamp"])
-        
-        # Create chat object
-        chat_data = {
-            "id": str(uuid.uuid4()),
-            "title": title,
-            "category": category,
-            "date": datetime.now().isoformat(),
-            "messages": all_messages,
-            "tags": tag_list,
-            "messageCount": len(all_messages)
-        }
-        
-        # Save chat
-        chat_id = save_chat(chat_data)
-        
-        return {"id": chat_id, "messageCount": len(all_messages)}
-    except Exception as e:
-        # Catch-all exception handler
-        print(f"Unexpected error in upload_chat: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+                failed_files += 1
+        except Exception as e:
+            print(f"Error reading file {file.filename}: {str(e)}")
+            failed_files += 1
+    
+    if not all_messages and failed_files > 0:
+        # All files failed to process
+        raise HTTPException(
+            status_code=500, 
+            detail="Failed to extract any messages from your screenshots. Please try with different images."
+        )
+    
+    # Sort messages by timestamp if available, otherwise keep original order
+    if all(msg.get("timestamp") for msg in all_messages):
+        all_messages.sort(key=lambda msg: msg["timestamp"])
+    
+    # Create chat object
+    chat_data = {
+        "id": str(uuid.uuid4()),
+        "title": title,
+        "category": category,
+        "date": datetime.now().isoformat(),
+        "messages": all_messages,
+        "tags": tag_list,
+        "messageCount": len(all_messages)
+    }
+    
+    # Save chat
+    chat_id = save_chat(chat_data)
+    
+    # Provide a detailed response with warnings if some files couldn't be processed
+    response = {
+        "id": chat_id, 
+        "messageCount": len(all_messages),
+        "filesProcessed": processed_files,
+        "filesFailed": failed_files,
+        "totalFiles": processed_files + failed_files
+    }
+    
+    if failed_files > 0:
+        response["warning"] = f"{failed_files} out of {processed_files + failed_files} files couldn't be processed correctly."
+    
+    return response
 
 @app.get("/chats")
 def get_all_chats():
@@ -175,6 +212,17 @@ def delete_chat(chat_id: str):
     del chats_db[chat_id]
     return {"message": "Chat deleted successfully"}
 
+@app.get("/status")
+def check_status():
+    """Check the API and OCR service status"""
+    return {
+        "status": "running",
+        "vision_api_available": VISION_API_AVAILABLE,
+        "vision_api_working": verify_vision_api_credentials(),
+        "fallback_ocr": "Tesseract",
+        "credentials_path": os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'Not set')
+    }
+
 # For demo/testing - add some sample data
 if __name__ == "__main__":
     # Create a few sample chats
@@ -194,3 +242,4 @@ if __name__ == "__main__":
     }
     
     save_chat(sample_chat)
+# Added Vision API verification

@@ -12,13 +12,47 @@ import uuid
 import pytesseract
 import re
 from datetime import datetime
+from functools import reduce
+import logging
 
-# Check if Google Vision API is available
+# For Google Cloud Vision integration
 try:
     from google.cloud import vision
-    VISION_API_AVAILABLE = True
+    
+    # Check for credentials in common locations if not set in environment
+    credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    
+    # Look in project directories if not set
+    if not credentials_path or not os.path.exists(credentials_path):
+        possible_paths = [
+            # Current directory
+            os.path.join(os.getcwd(), "mimetic-card-457310-n5-890f77604726.json"),
+            # Parent directory
+            os.path.join(os.path.dirname(os.getcwd()), "mimetic-card-457310-n5-890f77604726.json"),
+            # Memory-Box directory
+            os.path.join(os.path.dirname(os.getcwd()), "Memory-Box", "mimetic-card-457310-n5-890f77604726.json"),
+            # Specific path for this project
+            "/home/madhav/Desktop/memvol/Memory-Box/mimetic-card-457310-n5-890f77604726.json"
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = path
+                credentials_path = path
+                logging.info(f"Found credentials at: {path}")
+                break
+    
+    VISION_API_AVAILABLE = credentials_path is not None and os.path.exists(credentials_path)
+    if VISION_API_AVAILABLE:
+        logging.info(f"Google Vision API enabled with credentials at: {credentials_path}")
+    else:
+        logging.warning("Google Vision API not available - credentials not found")
 except ImportError:
     VISION_API_AVAILABLE = False
+    logging.warning("Google Vision API not available - package not installed")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 class OCRService:
     """
@@ -310,176 +344,212 @@ def extract_chat_region(image_data):
     chat_region = image[y:y+h, x:x+w]
     return chat_region
 
-def detect_chat_bubbles(image_data):
+def detect_chat_bubbles(image_bytes, client=None):
     """
-    Detects individual chat bubbles in the image and identifies sender
-    based on position (left=them, right=you)
+    Detect chat bubbles in an image using Google Cloud Vision API.
     
     Args:
-        image_data: Image containing only the chat region
+        image_bytes (bytes): The image data in bytes
+        client: A Google Cloud Vision API client instance
         
     Returns:
-        List of bubble objects with sender and text information
+        list: A list of dictionaries containing message data
     """
-    # First extract just the chat region
-    chat_region = extract_chat_region(image_data)
-    height, width = chat_region.shape[:2]
-    mid_x = width / 2
-    
-    bubbles = []
-    
-    if VISION_API_AVAILABLE:
-        # Use Google Vision API for more accurate text detection
-        # Initialize Vision API client
+    if client is None and VISION_API_AVAILABLE:
         client = vision.ImageAnnotatorClient()
+    elif client is None:
+        logging.error("No Vision API client provided and credentials not available")
+        return []
         
-        # Convert image to format needed by Vision API
-        success, encoded_image = cv2.imencode('.jpg', chat_region)
-        image_content = encoded_image.tobytes()
+    try:
+        image = vision.Image(content=image_bytes)
         
-        image = vision.Image(content=image_content)
+        # Detect text
         response = client.text_detection(image=image)
-        texts = response.text_annotations
-        
-        # Skip the first element which is the entire text
-        if texts:
-            blocks = texts[1:]
+        if response.error.message:
+            logging.error(f"Error from Vision API: {response.error.message}")
+            return []
             
-            for block in blocks:
-                # Get bounding box coordinates
-                vertices = [(vertex.x, vertex.y) for vertex in block.bounding_poly.vertices]
-                
-                # Calculate center of the bounding box
-                center_x = sum(x for x, _ in vertices) / 4
-                
-                # Determine sender based on position
-                sender = "user" if center_x > mid_x else "other"
-                
-                bubbles.append({
-                    "sender": sender,
-                    "text": block.description,
-                    "bounding_box": vertices
-                })
-    else:
-        # Fallback to Tesseract OCR
-        # Convert to PIL Image for Tesseract
-        pil_img = Image.fromarray(cv2.cvtColor(chat_region, cv2.COLOR_BGR2RGB))
+        # Get the full text annotation
+        document = response.full_text_annotation
         
-        # Get OCR data with bounding boxes
-        ocr_data = pytesseract.image_to_data(pil_img, output_type=pytesseract.Output.DICT)
+        # Process text annotations to extract messages
+        all_text = document.text
         
-        # Group text by lines/blocks
-        n_boxes = len(ocr_data['text'])
-        current_line = []
-        current_line_y = None
-        line_threshold = 10  # Pixels tolerance for same line
+        # Use the extracted text to identify messages
+        messages = []
         
-        for i in range(n_boxes):
-            if not ocr_data['text'][i].strip():
-                continue
+        # Process blocks of text
+        for page in document.pages:
+            for block in page.blocks:
+                block_text = ""
+                for paragraph in block.paragraphs:
+                    for word in paragraph.words:
+                        word_text = ''.join([symbol.text for symbol in word.symbols])
+                        block_text += word_text + " "
                 
-            x = ocr_data['left'][i]
-            y = ocr_data['top'][i]
-            w = ocr_data['width'][i]
-            h = ocr_data['height'][i]
-            text = ocr_data['text'][i]
-            
-            # If this is a new line or the first item
-            if current_line_y is None or abs(y - current_line_y) > line_threshold:
-                # Process the previous line if it exists
-                if current_line:
-                    # Calculate center of the line
-                    line_x = sum(item[0] for item in current_line) / len(current_line)
-                    line_text = " ".join(item[4] for item in current_line)
-                    sender = "user" if line_x > mid_x else "other"
+                # Try to identify if this block contains a message
+                block_text = block_text.strip()
+                if not block_text:
+                    continue
                     
-                    # Create bounding box list
-                    bbox = []
-                    for item in current_line:
-                        bbox.append((item[0], item[1]))
-                        bbox.append((item[0] + item[2], item[1]))
-                        bbox.append((item[0] + item[2], item[1] + item[3]))
-                        bbox.append((item[0], item[1] + item[3]))
+                # Simple heuristic: check if the block looks like a message
+                # Look for patterns like "Name: Message" or timestamps
+                sender_match = re.search(r'^([A-Za-z0-9_]+):', block_text)
+                time_match = re.search(r'(\d{1,2}:\d{2}(?:\s?[AP]M)?)', block_text)
+                
+                if sender_match:
+                    sender = sender_match.group(1)
+                    # Extract message content (everything after the sender)
+                    text = block_text[sender_match.end():].strip()
                     
-                    bubbles.append({
+                    # Extract timestamp if present
+                    timestamp = None
+                    if time_match:
+                        timestamp = time_match.group(1)
+                        # Remove timestamp from message if it's in the text
+                        text = text.replace(timestamp, "").strip()
+                    
+                    messages.append({
                         "sender": sender,
-                        "text": line_text,
-                        "bounding_box": bbox
+                        "text": text,
+                        "timestamp": timestamp
                     })
-                
-                # Start a new line
-                current_line = [(x, y, w, h, text)]
-                current_line_y = y
-            else:
-                # Add to current line
-                current_line.append((x, y, w, h, text))
         
-        # Process the last line
-        if current_line:
-            line_x = sum(item[0] for item in current_line) / len(current_line)
-            line_text = " ".join(item[4] for item in current_line)
-            sender = "user" if line_x > mid_x else "other"
+        # If structured parsing failed, fall back to simpler text processing
+        if not messages and all_text:
+            messages = extract_text_messages(all_text)
             
-            # Create bounding box list
-            bbox = []
-            for item in current_line:
-                bbox.append((item[0], item[1]))
-                bbox.append((item[0] + item[2], item[1]))
-                bbox.append((item[0] + item[2], item[1] + item[3]))
-                bbox.append((item[0], item[1] + item[3]))
+        return messages
             
-            bubbles.append({
-                "sender": sender,
-                "text": line_text,
-                "bounding_box": bbox
-            })
-    
-    # Sort bubbles by y-coordinate to maintain conversation order
-    bubbles.sort(key=lambda b: b["bounding_box"][0][1])
-    
-    return bubbles
+    except Exception as e:
+        logging.error(f"Error in detect_chat_bubbles: {str(e)}")
+        return []
 
-def extract_messages_from_image(image_data):
+def extract_messages_from_image(image_bytes):
     """
-    Main function to extract chat messages from an image
+    Extract chat messages from an image.
     
     Args:
-        image_data: Image bytes
+        image_bytes (bytes): The image data in bytes
         
     Returns:
-        List of message objects with sender, text, and timestamp
+        list: A list of dictionaries containing message data
     """
-    # Get chat bubbles
-    bubbles = detect_chat_bubbles(image_data)
+    try:
+        if VISION_API_AVAILABLE:
+            logging.info("Using Google Cloud Vision API for OCR")
+            client = vision.ImageAnnotatorClient()
+            return detect_chat_bubbles(image_bytes, client)
+        else:
+            logging.info("Vision API not available, falling back to Tesseract OCR")
+            # Use Tesseract OCR as fallback
+            image = Image.open(io.BytesIO(image_bytes))
+            text = pytesseract.image_to_string(image)
+            return extract_text_messages(text)
+    except Exception as e:
+        logging.error(f"Error extracting messages from image: {str(e)}")
+        return []
+
+def extract_text_messages(text):
+    """
+    Extract structured messages from plain text.
     
-    # Process bubbles to extract additional info like timestamps
+    Args:
+        text (str): Text extracted from an image
+        
+    Returns:
+        list: A list of message dictionaries
+    """
     messages = []
-    for bubble in bubbles:
-        # Try to identify timestamps within the text
-        text = bubble["text"]
-        timestamp = None
-        
-        # Look for common timestamp patterns
-        time_patterns = [
-            r'(\d{1,2}:\d{2}(?:\s?[AP]M)?)',  # matches "1:23 PM", "13:45"
-            r'(\d{1,2}:\d{2}:\d{2})',         # matches "13:45:30"
-        ]
-        
-        for pattern in time_patterns:
-            match = re.search(pattern, text)
-            if match:
-                timestamp = match.group(1)
-                # Remove timestamp from text if found
-                text = re.sub(pattern, '', text).strip()
-                break
-        
+    
+    # Split text into lines
+    lines = text.strip().split('\n')
+    current_message = ""
+    current_sender = None
+    current_timestamp = None
+    
+    # Simple patterns for identifying message parts
+    time_pattern = r'(\d{1,2}:\d{2}(?:\s?[AP]M)?)'
+    sender_pattern = r'^([A-Za-z0-9_]+):' 
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check for timestamp
+        time_match = re.search(time_pattern, line)
+        if time_match:
+            current_timestamp = time_match.group(1)
+            # Remove timestamp from line
+            line = re.sub(time_pattern, '', line).strip()
+            
+        # Check for sender
+        sender_match = re.search(sender_pattern, line)
+        if sender_match:
+            # If we have a previous message, save it
+            if current_message and current_sender:
+                messages.append({
+                    "sender": current_sender,
+                    "text": current_message.strip(),
+                    "timestamp": current_timestamp
+                })
+                current_message = ""
+                current_timestamp = None
+                
+            current_sender = sender_match.group(1)
+            # Remove sender from line
+            line = re.sub(sender_pattern, '', line).strip()
+            current_message = line
+        else:
+            # Continue the previous message
+            current_message += " " + line
+    
+    # Don't forget the last message
+    if current_message and current_sender:
         messages.append({
-            "sender": bubble["sender"],
-            "text": text,
-            "timestamp": timestamp
+            "sender": current_sender,
+            "text": current_message.strip(),
+            "timestamp": current_timestamp
         })
     
-    return messages 
+    return messages
+
+def verify_vision_api_credentials():
+    """
+    Verify that the Google Cloud Vision API credentials are properly configured.
+    
+    Returns:
+        bool: True if credentials are valid and API is accessible, False otherwise
+    """
+    if not VISION_API_AVAILABLE:
+        logging.warning("Vision API is not available. Check your credentials.")
+        return False
+        
+    try:
+        # Create a client and try a simple operation
+        client = vision.ImageAnnotatorClient()
+        
+        # Create a tiny test image (1x1 pixel) to minimize data transfer
+        tiny_image = Image.new('RGB', (1, 1), color='white')
+        img_byte_arr = io.BytesIO()
+        tiny_image.save(img_byte_arr, format='PNG')
+        img_bytes = img_byte_arr.getvalue()
+        
+        # Try to analyze the image
+        image = vision.Image(content=img_bytes)
+        response = client.label_detection(image=image)
+        
+        if response.error.message:
+            logging.error(f"Error from Vision API: {response.error.message}")
+            return False
+            
+        logging.info("Vision API credentials verified successfully")
+        return True
+    except Exception as e:
+        logging.error(f"Error verifying Vision API credentials: {str(e)}")
+        return False
 
 # Export these functions for use in other modules
 __all__ = [
@@ -487,5 +557,6 @@ __all__ = [
     'extract_chat_region', 
     'detect_chat_bubbles', 
     'extract_messages_from_image',
-    'VISION_API_AVAILABLE'
+    'VISION_API_AVAILABLE',
+    'verify_vision_api_credentials'
 ] 

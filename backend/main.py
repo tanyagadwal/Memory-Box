@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import io
 from datetime import datetime
-from ocr_service import extract_messages_from_image
+from ocr_service import extract_messages_from_image, VISION_API_AVAILABLE
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -72,40 +72,52 @@ async def upload_chat(
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
+    
+    # Check if we have OCR capabilities
+    if not VISION_API_AVAILABLE:
+        # We'll use our fallback OCR, but let the client know
+        print("Warning: Google Vision API not available, using fallback OCR")
         
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
     
     # Process images in order
     all_messages = []
-    for file in files:
-        contents = await file.read()
-        try:
-            # Extract chat messages using our OCR service
-            messages = extract_messages_from_image(contents)
-            all_messages.extend(messages)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
-            
-    # Sort messages by timestamp if available, otherwise keep original order
-    if all(msg.get("timestamp") for msg in all_messages):
-        all_messages.sort(key=lambda msg: msg["timestamp"])
-    
-    # Create chat object
-    chat_data = {
-        "id": str(uuid.uuid4()),
-        "title": title,
-        "category": category,
-        "date": datetime.now().isoformat(),
-        "messages": all_messages,
-        "tags": tag_list,
-        "messageCount": len(all_messages)
-    }
-    
-    # Save chat
-    chat_id = save_chat(chat_data)
-    
-    return {"id": chat_id, "messageCount": len(all_messages)}
+    try:
+        for file in files:
+            contents = await file.read()
+            try:
+                # Extract chat messages using our OCR service
+                messages = extract_messages_from_image(contents)
+                all_messages.extend(messages)
+            except Exception as e:
+                # Log the error and continue with other files
+                print(f"Error processing file {file.filename}: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+                
+        # Sort messages by timestamp if available, otherwise keep original order
+        if all(msg.get("timestamp") for msg in all_messages):
+            all_messages.sort(key=lambda msg: msg["timestamp"])
+        
+        # Create chat object
+        chat_data = {
+            "id": str(uuid.uuid4()),
+            "title": title,
+            "category": category,
+            "date": datetime.now().isoformat(),
+            "messages": all_messages,
+            "tags": tag_list,
+            "messageCount": len(all_messages)
+        }
+        
+        # Save chat
+        chat_id = save_chat(chat_data)
+        
+        return {"id": chat_id, "messageCount": len(all_messages)}
+    except Exception as e:
+        # Catch-all exception handler
+        print(f"Unexpected error in upload_chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/chats")
 def get_all_chats():

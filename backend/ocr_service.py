@@ -13,6 +13,13 @@ import pytesseract
 import re
 from datetime import datetime
 
+# Check if Google Vision API is available
+try:
+    from google.cloud import vision
+    VISION_API_AVAILABLE = True
+except ImportError:
+    VISION_API_AVAILABLE = False
+
 class OCRService:
     """
     Service for handling OCR operations using Google Cloud Vision API.
@@ -473,3 +480,12 @@ def extract_messages_from_image(image_data):
         })
     
     return messages 
+
+# Export these functions for use in other modules
+__all__ = [
+    'OCRService', 
+    'extract_chat_region', 
+    'detect_chat_bubbles', 
+    'extract_messages_from_image',
+    'VISION_API_AVAILABLE'
+] 

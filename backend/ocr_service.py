@@ -456,62 +456,68 @@ def extract_text_messages(text):
     Extract structured messages from plain text.
     
     Args:
-        text (str): Text extracted from an image
+        text (str): The text to extract messages from
         
     Returns:
-        list: A list of message dictionaries
+        list: A list of dictionaries containing message data
     """
+    if not text:
+        return []
+        
     messages = []
-    
-    # Split text into lines
-    lines = text.strip().split('\n')
-    current_message = ""
     current_sender = None
-    current_timestamp = None
-    
-    # Simple patterns for identifying message parts
+    current_text = []
     time_pattern = r'(\d{1,2}:\d{2}(?:\s?[AP]M)?)'
-    sender_pattern = r'^([A-Za-z0-9_]+):' 
+    sender_pattern = r'^([A-Za-z0-9_]+):'
+    
+    # Process the text line by line
+    lines = text.split('\n')
     
     for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Check for timestamp
-        time_match = re.search(time_pattern, line)
-        if time_match:
-            current_timestamp = time_match.group(1)
-            # Remove timestamp from line
-            line = re.sub(time_pattern, '', line).strip()
-            
-        # Check for sender
+        # Check if this line starts a new message
         sender_match = re.search(sender_pattern, line)
+        
         if sender_match:
-            # If we have a previous message, save it
-            if current_message and current_sender:
-                messages.append({
-                    "sender": current_sender,
-                    "text": current_message.strip(),
-                    "timestamp": current_timestamp
-                })
-                current_message = ""
-                current_timestamp = None
+            # If we were building a previous message, save it
+            if current_sender and current_text:
+                # Extract timestamp from the text if present
+                time_match = re.search(time_pattern, ' '.join(current_text))
+                timestamp = time_match.group(1) if time_match else None
                 
+                # Remove timestamp from message text if found
+                message_text = ' '.join(current_text)
+                if timestamp:
+                    message_text = message_text.replace(timestamp, '').strip()
+                
+                messages.append({
+                    'sender': current_sender,
+                    'text': message_text,
+                    'timestamp': timestamp
+                })
+            
+            # Start a new message
             current_sender = sender_match.group(1)
-            # Remove sender from line
-            line = re.sub(sender_pattern, '', line).strip()
-            current_message = line
+            current_text = [line[sender_match.end():].strip()]
         else:
-            # Continue the previous message
-            current_message += " " + line
+            # Continue with the current message
+            if current_sender:  # Ensure we have a current message
+                current_text.append(line.strip())
     
     # Don't forget the last message
-    if current_message and current_sender:
+    if current_sender and current_text:
+        # Extract timestamp from the text if present
+        time_match = re.search(time_pattern, ' '.join(current_text))
+        timestamp = time_match.group(1) if time_match else None
+        
+        # Remove timestamp from message text if found
+        message_text = ' '.join(current_text)
+        if timestamp:
+            message_text = message_text.replace(timestamp, '').strip()
+        
         messages.append({
-            "sender": current_sender,
-            "text": current_message.strip(),
-            "timestamp": current_timestamp
+            'sender': current_sender,
+            'text': message_text,
+            'timestamp': timestamp
         })
     
     return messages

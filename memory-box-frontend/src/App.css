@@ -36,3 +36,85 @@
     transform: rotate(360deg);
   }
 }
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Button styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-primary {
+  background-color: #6366f1;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #4f46e5;
+}
+
+.btn-secondary {
+  background-color: #f1f3f5;
+  color: #343a40;
+}
+
+.btn-secondary:hover {
+  background-color: #e9ecef;
+}
+
+.btn-ghost-primary {
+  color: #6366f1;
+  background-color: transparent;
+}
+
+.btn-ghost-primary:hover {
+  background-color: #f0f0ff;
+}
+
+.btn-ghost-danger {
+  color: #ef4444;
+  background-color: transparent;
+}
+
+.btn-ghost-danger:hover {
+  background-color: #fee2e2;
+}
+
+/* Card styles */
+.card {
+  background-color: white;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Chat bubble styles */
+.shadow-bubble {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
+
+/* Form styles */
+input, select, textarea {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #dee2e6;
+  border-radius: 0.375rem;
+  transition: all 0.2s;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}

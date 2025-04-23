@@ -1,44 +1,37 @@
 import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
-import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router-dom';
-import { processImageWithOCR } from '../api/ocrService';
-import { saveChat } from '../api/chatService';
+import { useDropzone } from 'react-dropzone';
+import axios from 'axios';
+import {
+  CloudArrowUpIcon,
+  DocumentTextIcon,
+  XMarkIcon,
+  PhotoIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon
+} from '@heroicons/react/24/outline';
 
 const Upload = () => {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
-  const [formData, setFormData] = useState({
-    title: '',
-    category: '',
-    tags: ''
-  });
-  const [isUploading, setIsUploading] = useState(false);
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState('');
+  const [tags, setTags] = useState('');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [processingStatus, setProcessingStatus] = useState('');
-
-  const categories = [
-    'Friends',
-    'Family',
-    'Work',
-    'Relationship',
-    'Group Chats',
-    'Other'
-  ];
-
+  const [success, setSuccess] = useState(false);
+  
   const onDrop = useCallback(acceptedFiles => {
-    // Filter for only image files
-    const imageFiles = acceptedFiles.filter(file => file.type.startsWith('image/'));
+    // Add preview URLs to the files for display
+    const newFiles = acceptedFiles.map(file => 
+      Object.assign(file, {
+        preview: URL.createObjectURL(file)
+      })
+    );
     
-    // Map files to add preview URLs
-    const newFiles = imageFiles.map(file => Object.assign(file, {
-      preview: URL.createObjectURL(file)
-    }));
-    
-    setFiles(prevFiles => [...prevFiles, ...newFiles]);
-    setError(null);
+    setFiles(prev => [...prev, ...newFiles]);
   }, []);
-
+  
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
@@ -48,176 +41,145 @@ const Upload = () => {
     },
     multiple: true
   });
-
+  
   const removeFile = (index) => {
-    const newFiles = [...files];
-    URL.revokeObjectURL(newFiles[index].preview);
-    newFiles.splice(index, 1);
-    setFiles(newFiles);
+    setFiles(prev => {
+      const newFiles = [...prev];
+      // Revoke the URL to prevent memory leaks
+      URL.revokeObjectURL(newFiles[index].preview);
+      newFiles.splice(index, 1);
+      return newFiles;
+    });
   };
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (files.length === 0) {
-      setError('Please upload at least one image');
+      setError('Please upload at least one screenshot.');
       return;
     }
     
-    if (!formData.title.trim()) {
-      setError('Please provide a title');
+    if (!title) {
+      setError('Please enter a title for this chat.');
       return;
     }
     
-    if (!formData.category) {
-      setError('Please select a category');
+    if (!category) {
+      setError('Please select a category.');
       return;
     }
     
-    setIsUploading(true);
-    setProcessingStatus('Uploading files...');
+    setLoading(true);
     setError(null);
     
     try {
-      // Process each file with OCR
-      const allMessages = [];
+      // Create form data
+      const formData = new FormData();
+      files.forEach(file => {
+        formData.append('files', file);
+      });
+      formData.append('title', title);
+      formData.append('category', category);
+      formData.append('tags', tags);
       
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setProcessingStatus(`Processing image ${i + 1} of ${files.length}...`);
-        
-        try {
-          // Process the image with OCR using the backend API
-          const result = await processImageWithOCR(file);
-          
-          if (!result.success) {
-            throw new Error(result.error || 'OCR processing failed');
-          }
-          
-          // Add the extracted messages to our collection
-          if (result.messages && result.messages.length > 0) {
-            // Format the messages with proper IDs
-            const formattedMessages = result.messages.map((msg, msgIndex) => ({
-              id: `msg_${i}_${msgIndex}`,
-              sender: msg.sender || 'Unknown',
-              content: msg.content || '',
-              timestamp: msg.timestamp || new Date().toISOString(),
-              isUser: msg.sender === 'You' || msg.sender === 'Me'
-            }));
-            
-            allMessages.push(...formattedMessages);
-          }
-        } catch (err) {
-          console.error('Error processing image:', err);
-          setError(`Failed to process image ${file.name}. ${err.message}`);
-          setIsUploading(false);
-          return;
+      // Send request to API
+      const response = await axios.post('http://localhost:8000/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
         }
-      }
+      });
       
-      setProcessingStatus('Saving chat data...');
+      setSuccess(true);
       
-      // Parse tags from comma-separated string
-      const tags = formData.tags
-        ? formData.tags.split(',').map(tag => tag.trim()).filter(tag => tag)
-        : [];
+      // Clear form after successful upload
+      setFiles([]);
+      setTitle('');
+      setCategory('');
+      setTags('');
       
-      // Create chat object
-      const chatData = {
-        title: formData.title,
-        category: formData.category,
-        tags,
-        messages: allMessages
-      };
+      // Navigate to the new chat after a delay
+      setTimeout(() => {
+        navigate(`/chat/${response.data.id}`);
+      }, 1500);
       
-      // Save chat data
-      // In a real app, we would call the backend API
-      // For demo, we'll use our local storage service
-      const savedChat = await saveChat(chatData);
-      
-      // Show success message
-      alert('Upload successful! Chat data extracted and saved.');
-      
-      // Redirect to the chat view
-      navigate(`/chat/${savedChat.id}`);
     } catch (err) {
-      setError('Upload failed. Please try again.');
-      console.error('Upload error:', err);
+      console.error('Error uploading files:', err);
+      setError(err.response?.data?.detail || 'Failed to process your screenshots. Please try again.');
     } finally {
-      setIsUploading(false);
-      setProcessingStatus('');
+      setLoading(false);
     }
   };
-
+  
   return (
     <div className="max-w-3xl mx-auto">
-      <h1 className="text-3xl font-bold mb-8 text-secondary-800">Upload Chat Screenshots</h1>
+      <h1 className="text-3xl font-bold text-secondary-800 mb-6">Upload Chat Screenshots</h1>
       
-      {error && (
-        <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 text-red-700">
-          {error}
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-4 mb-6 flex items-start">
+          <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Success!</p>
+            <p>Your chat has been processed successfully. Redirecting you to view it...</p>
+          </div>
         </div>
       )}
       
-      <form onSubmit={handleSubmit} className="space-y-8">
-        {/* File Dropzone */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4 mb-6 flex items-start">
+          <ExclamationCircleIcon className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Error</p>
+            <p>{error}</p>
+          </div>
+        </div>
+      )}
+      
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Dropzone */}
         <div 
           {...getRootProps()} 
           className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-            isDragActive 
-              ? 'border-primary-400 bg-primary-50' 
-              : 'border-secondary-300 hover:border-primary-300 hover:bg-secondary-50'
+            isDragActive ? 'border-primary-400 bg-primary-50' : 'border-secondary-300 hover:border-primary-400 hover:bg-secondary-50'
           }`}
         >
           <input {...getInputProps()} />
           <CloudArrowUpIcon className="h-12 w-12 text-secondary-400 mx-auto mb-4" />
-          <p className="text-lg text-secondary-600 mb-2">
-            {isDragActive
-              ? 'Drop the files here...'
-              : 'Drag & drop your chat screenshots here'}
+          <p className="text-secondary-700 font-medium mb-1">
+            {isDragActive ? 'Drop screenshots here' : 'Drag & drop chat screenshots here'}
           </p>
-          <p className="text-sm text-secondary-500">
-            Supported formats: JPG, PNG, WebP
+          <p className="text-secondary-500 text-sm mb-3">
+            or click to browse files
           </p>
-          <button
-            type="button"
-            className="mt-4 btn btn-secondary"
-            onClick={e => {
-              e.stopPropagation();
-              document.querySelector('input[type="file"]').click();
-            }}
-          >
-            Browse Files
-          </button>
+          <p className="text-xs text-secondary-500">
+            Supports: JPG, PNG, WebP
+          </p>
         </div>
         
-        {/* File Previews */}
+        {/* Preview Files */}
         {files.length > 0 && (
-          <div className="space-y-4">
-            <h3 className="font-medium text-secondary-700">Selected Files ({files.length})</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+          <div>
+            <h3 className="text-secondary-700 font-medium mb-3">Uploaded Screenshots ({files.length})</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {files.map((file, index) => (
-                <div key={index} className="relative rounded-md overflow-hidden border border-secondary-200 bg-white">
-                  <img 
-                    src={file.preview} 
-                    alt={`Preview ${index}`}
-                    className="w-full h-32 object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeFile(index)}
-                    className="absolute top-1 right-1 p-1 rounded-full bg-secondary-800 bg-opacity-60 text-white hover:bg-opacity-80 transition-opacity"
-                  >
-                    <XMarkIcon className="h-4 w-4" />
-                  </button>
-                  <div className="p-2 text-xs truncate text-secondary-600">
-                    {file.name}
+                <div key={index} className="relative">
+                  <div className="relative bg-secondary-100 rounded-lg overflow-hidden aspect-square">
+                    <img 
+                      src={file.preview} 
+                      alt={`Screenshot ${index + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeFile(index)}
+                      className="absolute top-2 right-2 bg-secondary-800 bg-opacity-70 text-white rounded-full p-1 hover:bg-opacity-100 transition-opacity"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                    </button>
                   </div>
+                  <p className="mt-1 text-xs text-secondary-600 truncate">
+                    {file.name}
+                  </p>
                 </div>
               ))}
             </div>
@@ -225,72 +187,90 @@ const Upload = () => {
         )}
         
         {/* Form Fields */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="col-span-full">
-            <label htmlFor="title" className="block mb-2 font-medium text-secondary-700">
-              Chat Title *
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="title" className="block text-secondary-700 font-medium mb-1">
+              Chat Title
             </label>
             <input
               type="text"
               id="title"
-              name="title"
-              value={formData.title}
-              onChange={handleChange}
-              className="w-full p-3 rounded-md border border-secondary-300 focus:ring-2 focus:ring-primary-300 focus:border-primary-500 outline-none transition"
-              placeholder="E.g., Road Trip Planning with Friends"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="E.g., Family Group Chat, Work Project Team, etc."
+              className="w-full"
               required
             />
           </div>
           
           <div>
-            <label htmlFor="category" className="block mb-2 font-medium text-secondary-700">
-              Category *
+            <label htmlFor="category" className="block text-secondary-700 font-medium mb-1">
+              Category
             </label>
             <select
               id="category"
-              name="category"
-              value={formData.category}
-              onChange={handleChange}
-              className="w-full p-3 rounded-md border border-secondary-300 focus:ring-2 focus:ring-primary-300 focus:border-primary-500 outline-none transition"
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              className="w-full"
               required
             >
               <option value="">Select a category</option>
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
+              <option value="WhatsApp">WhatsApp</option>
+              <option value="Messenger">Messenger</option>
+              <option value="Telegram">Telegram</option>
+              <option value="Instagram">Instagram</option>
+              <option value="WeChat">WeChat</option>
+              <option value="Discord">Discord</option>
+              <option value="Slack">Slack</option>
+              <option value="iMessage">iMessage</option>
+              <option value="Friends">Friends</option>
+              <option value="Family">Family</option>
+              <option value="Work">Work</option>
+              <option value="Other">Other</option>
             </select>
           </div>
           
           <div>
-            <label htmlFor="tags" className="block mb-2 font-medium text-secondary-700">
-              Tags (optional)
+            <label htmlFor="tags" className="block text-secondary-700 font-medium mb-1">
+              Tags <span className="text-secondary-500 font-normal">(optional, comma-separated)</span>
             </label>
             <input
               type="text"
               id="tags"
-              name="tags"
-              value={formData.tags}
-              onChange={handleChange}
-              className="w-full p-3 rounded-md border border-secondary-300 focus:ring-2 focus:ring-primary-300 focus:border-primary-500 outline-none transition"
-              placeholder="E.g., vacation, summer, friends (comma-separated)"
+              value={tags}
+              onChange={e => setTags(e.target.value)}
+              placeholder="E.g., family, vacation, project, etc."
+              className="w-full"
             />
           </div>
         </div>
         
         {/* Submit Button */}
-        <div className="pt-4">
-          <button
-            type="submit"
-            disabled={isUploading}
-            className={`btn btn-primary py-3 px-6 w-full md:w-auto ${
-              isUploading ? 'opacity-70 cursor-not-allowed' : ''
-            }`}
-          >
-            {isUploading ? processingStatus || 'Processing...' : 'Upload and Process'}
-          </button>
-        </div>
+        <button
+          type="submit"
+          disabled={loading || success}
+          className={`w-full btn ${loading || success ? 'bg-secondary-400 cursor-not-allowed' : 'btn-primary'}`}
+        >
+          {loading ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Processing...
+            </>
+          ) : success ? (
+            <>
+              <CheckCircleIcon className="h-5 w-5 mr-1" />
+              Processed Successfully
+            </>
+          ) : (
+            <>
+              <DocumentTextIcon className="h-5 w-5 mr-1" />
+              Process Chat
+            </>
+          )}
+        </button>
       </form>
     </div>
   );
